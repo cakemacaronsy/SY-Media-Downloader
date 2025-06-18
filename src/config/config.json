@@ -1,0 +1,37 @@
+{
+  "general": {
+    "download_path": "./downloads",
+    "max_concurrent": 3,
+    "auto_start": true,
+    "check_updates": true
+  },
+  "video": {
+    "default_format": "mp4",
+    "default_quality": "1080p",
+    "download_subtitles": true,
+    "download_thumbnail": true,
+    "merge_format": true
+  },
+  "audio": {
+    "default_format": "mp3",
+    "default_bitrate": "320k",
+    "embed_metadata": true,
+    "extract_audio": true
+  },
+  "network": {
+    "proxy": null,
+    "rate_limit": "10M",
+    "retry_attempts": 3,
+    "timeout": 30
+  },
+  "platforms": {
+    "youtube": {
+      "use_cookies": false,
+      "age_limit": null
+    },
+    "instagram": {
+      "username": null,
+      "password": null
+    }
+  }
+}

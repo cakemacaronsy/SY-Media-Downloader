@@ -1,0 +1,31 @@
+from setuptools import setup, find_packages
+
+setup(
+    name='media-downloader',
+    version='1.2.0',
+    description='A powerful media downloader with GUI and CLI support',
+    author='Your Name',
+    license='MIT',
+    packages=find_packages(where='src'),
+    package_dir={'': 'src'},
+    install_requires=[
+        'yt-dlp>=2024.1.0',
+        'pytube>=15.0.0',
+        'requests>=2.31.0',
+        'beautifulsoup4>=4.12.0',
+        'lxml>=5.0.0',
+        'PyQt6>=6.6.0',
+        'customtkinter>=5.2.0',
+        'ffmpeg-python>=0.2.0',
+        'Pillow>=10.2.0',
+        'mutagen>=1.47.0',
+        'aiohttp>=3.9.0',
+        'asyncio>=3.4.3',
+        'python-dotenv>=1.0.0',
+        'colorama>=0.4.6',
+        'tqdm>=4.66.0',
+        'validators>=0.22.0',
+    ],
+    python_requires='>=3.8',
+    include_package_data=True,
+)

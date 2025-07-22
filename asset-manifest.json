@@ -1,0 +1,13 @@
+{
+  "files": {
+    "main.css": "/SY-Media-Downloader/static/css/main.b24f0ad6.css",
+    "main.js": "/SY-Media-Downloader/static/js/main.278f8580.js",
+    "index.html": "/SY-Media-Downloader/index.html",
+    "main.b24f0ad6.css.map": "/SY-Media-Downloader/static/css/main.b24f0ad6.css.map",
+    "main.278f8580.js.map": "/SY-Media-Downloader/static/js/main.278f8580.js.map"
+  },
+  "entrypoints": [
+    "static/css/main.b24f0ad6.css",
+    "static/js/main.278f8580.js"
+  ]
+}

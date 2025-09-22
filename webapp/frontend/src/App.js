@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import axios from 'axios';
 import './App.css';
 
 function App() {
@@ -55,12 +56,12 @@ function App() {
     setDownloadLink(null);
     setVideoTitle('');
     try {
-      const res = await fetch(`${API_URL}/api/download`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url, format, resolution })
+      const response = await axios.post(`${API_URL}/api/download`, {
+        url,
+        format,
+        resolution
       });
-      const data = await res.json();
+      const data = response.data;
       if (data.file) {
         setDownloadLink(`${API_URL}${data.file}`);
         if (data.title) {
@@ -75,7 +76,16 @@ function App() {
         setStatus('Failed to download.');
       }
     } catch (err) {
-      setStatus(`Error: ${err.message || 'Unknown error'}`);
+      if (err.response) {
+        // Server responded with error
+        setStatus(`Error: ${err.response.data.error || err.response.data.detail || 'Server error'}`);
+      } else if (err.request) {
+        // Request made but no response
+        setStatus('Error: No response from server. Is the backend running?');
+      } else {
+        // Something else happened
+        setStatus(`Error: ${err.message || 'Unknown error'}`);
+      }
     }
   };
 

@@ -2,7 +2,6 @@
   "name": "media-downloader-frontend",
   "version": "0.1.0",
   "private": true,
-  "homepage": "https://cakemacaronsy.github.io/SY-Media-Downloader",
   "dependencies": {
     "react": "^18.0.0",
     "react-dom": "^18.0.0",

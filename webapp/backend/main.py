@@ -262,3 +262,18 @@ def get_file(filename: str):
         media_type=content_type,
         filename=filename
     )
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint for deployment platforms"""
+    return {"status": "healthy", "service": "SY Media Downloader API"}
+
+@app.get("/")
+async def root():
+    """Root endpoint with API information"""
+    return {
+        "message": "SY Media Downloader API",
+        "version": "1.0.0",
+        "docs": "/docs",
+        "health": "/health"
+    }

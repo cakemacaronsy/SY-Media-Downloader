@@ -1,0 +1,15 @@
+{
+  "buildCommand": "cd webapp/frontend && npm install && npm run build",
+  "outputDirectory": "webapp/frontend/build",
+  "installCommand": "cd webapp/frontend && npm install",
+  "framework": "create-react-app",
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ],
+  "env": {
+    "REACT_APP_API_URL": "@backend_api_url"
+  }
+}

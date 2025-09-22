@@ -1,0 +1,33 @@
+services:
+  # Backend API Service
+  - type: web
+    name: sy-media-downloader-api
+    runtime: python
+    buildCommand: "cd webapp/backend && pip install -r requirements.txt"
+    startCommand: "cd webapp/backend && uvicorn main:app --host 0.0.0.0 --port $PORT"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: ALLOWED_ORIGINS
+        value: https://your-frontend.vercel.app
+      - key: MAX_DOWNLOAD_SIZE
+        value: "500"  # MB
+    healthCheckPath: /health
+    
+  # Static Site for Frontend (alternative to Vercel)
+  - type: web
+    name: sy-media-downloader-frontend
+    runtime: static
+    buildCommand: "cd webapp/frontend && npm install && npm run build"
+    staticPublishPath: ./webapp/frontend/build
+    envVars:
+      - key: REACT_APP_API_URL
+        value: https://sy-media-downloader-api.onrender.com
+    headers:
+      - path: /*
+        name: X-Frame-Options
+        value: SAMEORIGIN
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html

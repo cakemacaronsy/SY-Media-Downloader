@@ -11,11 +11,15 @@ import yt_dlp
 import uuid
 import re
 
-app = FastAPI()
+app = FastAPI(title="SY Media Downloader API")
 
+# Get allowed origins from environment variable for production
+ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(",")
+
+# Configure CORS for production
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,  # Use environment variable
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -12,6 +12,9 @@ function App() {
   const [lightMode, setLightMode] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
 
+  // Get API URL from environment variable or use localhost as fallback
+  const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
+
   useEffect(() => {
     if (lightMode) {
       document.body.classList.add('light');
@@ -52,14 +55,14 @@ function App() {
     setDownloadLink(null);
     setVideoTitle('');
     try {
-      const res = await fetch('http://localhost:8000/api/download', {
+      const res = await fetch(`${API_URL}/api/download`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url, format, resolution })
       });
       const data = await res.json();
       if (data.file) {
-        setDownloadLink(`http://localhost:8000${data.file}`);
+        setDownloadLink(`${API_URL}${data.file}`);
         if (data.title) {
           setVideoTitle(data.title);
           setStatus(`Ready: "${data.title}"`);

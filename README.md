@@ -1,6 +1,6 @@
 # Media Downloader
 
-A powerful media downloader with graphical interface for downloading videos, audio, and images from YouTube, Facebook, Instagram, TikTok, Pinterest, and other platforms.
+A powerful media downloader with graphical interface for downloading videos, audio, and images from YouTube, Facebook, Instagram, TikTok, Pinterest, and other platformz.
 
 ## 📋 Table of Contents
 

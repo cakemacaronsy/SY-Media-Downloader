@@ -8,6 +8,7 @@ import time
 import uuid
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager
+from functools import lru_cache
 from typing import Optional
 from urllib.parse import quote
 
@@ -42,6 +43,7 @@ RATE_LIMIT_PER_MINUTE = int(os.getenv("RATE_LIMIT_PER_MINUTE", "5"))
 MAX_CONCURRENT_DOWNLOADS = int(os.getenv("MAX_CONCURRENT_DOWNLOADS", "2"))
 ALLOW_ANY_URL = os.getenv("ALLOW_ANY_URL", "false").lower() == "true"
 TRUST_PROXY = os.getenv("TRUST_PROXY", "true").lower() == "true"  # read X-Forwarded-For (Railway/Render)
+TRUST_PROXY_HOPS = max(1, int(os.getenv("TRUST_PROXY_HOPS", "1")))  # proxies between client and app
 COOKIES_FILE = os.getenv("COOKIES_FILE")  # Netscape-format cookies.txt for Facebook/Instagram
 COOKIES_CONTENT = os.getenv("COOKIES_CONTENT")  # same, pasted as an env var secret
 COOKIE_PLATFORMS = {"facebook", "instagram"}
@@ -53,6 +55,7 @@ _hits: dict = defaultdict(deque)
 _hits_lock = threading.Lock()
 
 
+@lru_cache(maxsize=1)
 def _cookies_path() -> Optional[str]:
     if COOKIES_FILE and os.path.isfile(COOKIES_FILE):
         return COOKIES_FILE
@@ -104,7 +107,11 @@ def _client_ip(request: Request) -> str:
     if TRUST_PROXY:
         fwd = request.headers.get("x-forwarded-for")
         if fwd:
-            return fwd.split(",")[0].strip()
+            # Clients can prepend fake entries; only the ones our own proxies appended
+            # (counted from the right) are trustworthy.
+            parts = [p.strip() for p in fwd.split(",") if p.strip()]
+            if parts:
+                return parts[-min(TRUST_PROXY_HOPS, len(parts))]
     return request.client.host if request.client else "unknown"
 
 
@@ -147,20 +154,20 @@ def download_video(body: DownloadRequest, request: Request):
         raise HTTPException(503, "Server is busy. Please try again shortly.")
 
     file_id = uuid.uuid4().hex
-    ydl_opts = {
-        "outtmpl": os.path.join(DOWNLOAD_DIR, f"{file_id}.%(ext)s"),
-        "quiet": True,
-        "noplaylist": True,
-        "max_filesize": MAX_DOWNLOAD_SIZE_MB * 1024 * 1024,
-        "match_filter": yt_dlp.utils.match_filter_func(f"duration <= {MAX_DURATION_SECONDS}"),
-        **build_ydl_format(fmt, body.resolution),
-    }
-    if platform in COOKIE_PLATFORMS:
-        cookies = _cookies_path()
-        if cookies:
-            ydl_opts["cookiefile"] = cookies
-
     try:
+        ydl_opts = {
+            "outtmpl": os.path.join(DOWNLOAD_DIR, f"{file_id}.%(ext)s"),
+            "quiet": True,
+            "noplaylist": True,
+            "max_filesize": MAX_DOWNLOAD_SIZE_MB * 1024 * 1024,
+            "match_filter": yt_dlp.utils.match_filter_func(f"duration <= {MAX_DURATION_SECONDS}"),
+            **build_ydl_format(fmt, body.resolution),
+        }
+        if platform in COOKIE_PLATFORMS:
+            cookies = _cookies_path()
+            if cookies:
+                ydl_opts["cookiefile"] = cookies
+
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)  # single pass: metadata + download
         if not info:

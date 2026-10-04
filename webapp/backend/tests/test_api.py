@@ -62,3 +62,28 @@ def test_rate_limit(client, monkeypatch):
 
 def test_health(client):
     assert client[0].get("/health").json()["status"] == "healthy"
+
+
+def test_rate_limit_not_bypassable_by_spoofed_forwarded_for(client, monkeypatch):
+    c, main, _ = client
+
+    def boom(*a, **k): raise RuntimeError("fail")
+    monkeypatch.setattr(main.yt_dlp, "YoutubeDL", boom)
+    # A client prepends its own fake IP; the trusted proxy appends the real one.
+    codes = [
+        c.post("/api/download", json={"url": "https://youtu.be/a"},
+               headers={"x-forwarded-for": f"9.9.9.{i}, 1.2.3.4"}).status_code
+        for i in range(5)
+    ]
+    assert codes[3:] == [429, 429]
+
+
+def test_concurrency_slot_released_when_setup_fails(client, monkeypatch):
+    c, main, _ = client
+    monkeypatch.setattr(main, "COOKIE_PLATFORMS", {"youtube"})
+    monkeypatch.setattr(main, "_cookies_path", lambda: (_ for _ in ()).throw(OSError("disk")))
+    monkeypatch.setattr(main, "RATE_LIMIT_PER_MINUTE", 100)
+    for i in range(main.MAX_CONCURRENT_DOWNLOADS + 2):
+        r = c.post("/api/download", json={"url": "https://youtu.be/a"},
+                   headers={"x-forwarded-for": f"1.1.1.{i}"})
+        assert r.status_code != 503, f"slot leaked on request {i}"

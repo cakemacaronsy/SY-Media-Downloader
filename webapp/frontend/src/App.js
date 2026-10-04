@@ -30,14 +30,21 @@ function App() {
 
   // Detect platform from URL
   const detectPlatform = (url) => {
-    if (url.includes('youtube.com') || url.includes('youtu.be')) return 'YouTube';
-    if (url.includes('facebook.com') || url.includes('fb.watch')) return 'Facebook';
-    if (url.includes('instagram.com')) return 'Instagram';
-    if (url.includes('tiktok.com')) return 'TikTok';
-    if (url.includes('twitter.com') || url.includes('x.com')) return 'Twitter/X';
-    if (url.includes('reddit.com')) return 'Reddit';
-    if (url.includes('vimeo.com')) return 'Vimeo';
-    if (url.includes('pinterest.com')) return 'Pinterest';
+    let host;
+    try {
+      host = new URL(url).hostname.toLowerCase();
+    } catch {
+      return 'Unknown';
+    }
+    const is = (...domains) => domains.some(d => host === d || host.endsWith('.' + d));
+    if (is('youtube.com', 'youtu.be')) return 'YouTube';
+    if (is('facebook.com', 'fb.watch')) return 'Facebook';
+    if (is('instagram.com')) return 'Instagram';
+    if (is('tiktok.com')) return 'TikTok';
+    if (is('twitter.com', 'x.com')) return 'Twitter/X';
+    if (is('reddit.com', 'redd.it')) return 'Reddit';
+    if (is('vimeo.com')) return 'Vimeo';
+    if (is('pinterest.com', 'pin.it')) return 'Pinterest';
     return 'Unknown';
   };
 

@@ -87,3 +87,20 @@ def test_concurrency_slot_released_when_setup_fails(client, monkeypatch):
         r = c.post("/api/download", json={"url": "https://youtu.be/a"},
                    headers={"x-forwarded-for": f"1.1.1.{i}"})
         assert r.status_code != 503, f"slot leaked on request {i}"
+
+
+def test_duration_filter_allows_unknown_but_blocks_live_and_long(client, monkeypatch):
+    _, main, _ = client
+    captured = {}
+
+    class Capture:
+        def __init__(self, opts): captured.update(opts)
+        def __enter__(self): raise RuntimeError("stop")
+        def __exit__(self, *a): return False
+
+    monkeypatch.setattr(main.yt_dlp, "YoutubeDL", Capture)
+    client[0].post("/api/download", json={"url": "https://youtu.be/a"})
+    f = captured["match_filter"]
+    assert f({"title": "no duration"}, incomplete=False) is None  # allowed
+    assert f({"duration": 10**6}, incomplete=False) is not None  # too long
+    assert f({"is_live": True}, incomplete=False) is not None  # live

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import './App.css';
 
@@ -15,6 +15,14 @@ function App() {
   const [busy, setBusy] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [fileFormat, setFileFormat] = useState('');
+  const [job, setJob] = useState(null);
+  const alive = useRef(true);
+
+  // Re-arm on mount: StrictMode mounts, unmounts and remounts in development
+  useEffect(() => {
+    alive.current = true;
+    return () => { alive.current = false; };
+  }, []);
 
   // Get API URL from environment variable or use localhost as fallback
   const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
@@ -68,54 +76,79 @@ function App() {
     }
   }, [url]);
 
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+  const errorMessage = (err) => {
+    if (err.response) {
+      const { error, detail } = err.response.data || {};
+      // FastAPI validation errors put a list of objects in `detail`
+      return error || (typeof detail === 'string' ? detail : null) || 'Server error';
+    }
+    if (err.request) return 'No response from server. Is the backend running?';
+    return err.message || 'Unknown error';
+  };
+
+  // Start a background job, then poll it until it finishes
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (busy) return;
     setBusy(true);
-    setStatus('Downloading on the server... large videos can take a few minutes.');
+    setStatus('Starting...');
     setDownloadLink(null);
     setVideoTitle('');
     setShowPreview(false);
+    setJob(null);
     try {
-      const response = await axios.post(`${API_URL}/api/download`, {
-        url,
-        format,
-        resolution
-      });
-      const data = response.data;
-      if (data.file) {
-        setDownloadLink(`${API_URL}${data.file}`);
-        // The server may fall back to another container, so trust its answer
-        setFileFormat(data.format || format);
-        if (data.title) {
-          setVideoTitle(data.title);
-          setStatus(`Ready: "${data.title}"`);
-        } else {
-          setStatus('Ready!');
+      const { data: created } = await axios.post(`${API_URL}/api/jobs`, { url, format, resolution });
+      let failures = 0;
+      while (alive.current) {
+        await sleep(1000);
+        let current;
+        try {
+          ({ data: current } = await axios.get(`${API_URL}/api/jobs/${created.id}`));
+          failures = 0;
+        } catch (pollErr) {
+          // ride out brief network blips, but give up if the job is gone
+          if (pollErr.response?.status === 404 || ++failures >= 5) throw pollErr;
+          continue;
         }
-      } else if (data.error) {
-        setStatus(`Error: ${data.error}`);
-      } else {
-        setStatus('Failed to download.');
+        if (!alive.current) return;
+        setJob(current);
+        if (current.status === 'done') {
+          const result = current.result;
+          setDownloadLink(`${API_URL}${result.file}`);
+          // The server may fall back to another container, so trust its answer
+          setFileFormat(result.format || format);
+          setVideoTitle(result.title || '');
+          setStatus(result.title ? `Ready: "${result.title}"` : 'Ready!');
+          break;
+        }
+        if (current.status === 'error') {
+          setStatus(`Error: ${current.error || 'Download failed'}`);
+          break;
+        }
+        setStatus(current.status === 'processing'
+          ? 'Processing (merging / converting)...'
+          : current.status === 'queued' ? 'Fetching video info...' : 'Downloading...');
       }
     } catch (err) {
-      if (err.response) {
-        // Server responded with error
-        const { error, detail } = err.response.data || {};
-        // FastAPI validation errors put a list of objects in `detail`
-        const msg = error || (typeof detail === 'string' ? detail : null) || 'Server error';
-        setStatus(`Error: ${msg}`);
-      } else if (err.request) {
-        // Request made but no response
-        setStatus('Error: No response from server. Is the backend running?');
-      } else {
-        // Something else happened
-        setStatus(`Error: ${err.message || 'Unknown error'}`);
-      }
+      setStatus(`Error: ${errorMessage(err)}`);
     } finally {
-      setBusy(false);
+      if (alive.current) {
+        setBusy(false);
+        setJob(null);
+      }
     }
   };
+
+  const formatBytes = (n) => {
+    if (!n) return '0 B';
+    const units = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.min(Math.floor(Math.log(n) / Math.log(1024)), units.length - 1);
+    return `${(n / 1024 ** i).toFixed(i ? 1 : 0)} ${units[i]}`;
+  };
+
+  const formatEta = (s) => (s == null ? '' : s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s left` : `${s}s left`);
 
   // Browsers can't play MKV/AVI (or FLAC everywhere), so only offer preview where it works
   const PREVIEW_TYPES = {
@@ -174,6 +207,29 @@ function App() {
         </button>
       </form>
       <div className="status">{status}</div>
+      {busy && job && (
+        <div className="progress" role="progressbar" aria-valuemin={0} aria-valuemax={100}
+             aria-valuenow={Math.round(job.progress || 0)}>
+          <div className="progress-track">
+            <div
+              className={`progress-fill${job.status === 'processing' ? ' pulsing' : ''}`}
+              style={{ width: `${job.progress || 0}%` }}
+            />
+          </div>
+          <div className="progress-meta">
+            <span>{Math.round(job.progress || 0)}%</span>
+            {job.status === 'downloading' && (
+              <span>
+                {job.parts > 1 && `${job.part === 1 ? 'Video' : 'Audio'} · `}
+                {formatBytes(job.downloaded_bytes)}
+                {job.total_bytes ? ` / ${formatBytes(job.total_bytes)}` : ''}
+                {job.speed ? ` · ${formatBytes(job.speed)}/s` : ''}
+                {job.eta != null ? ` · ${formatEta(job.eta)}` : ''}
+              </span>
+            )}
+          </div>
+        </div>
+      )}
       {downloadLink && (
         <div className="download-section">
           {previewType && (

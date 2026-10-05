@@ -5,13 +5,14 @@ A small web app for downloading video and audio from YouTube, TikTok, Twitter/X,
 ## Features
 
 - Paste a URL; the platform is detected from the hostname
+- Live progress bar with size, speed and time remaining
 - Video: MP4 (H.264/AAC where available, plays in QuickTime), WEBM, MKV, AVI
 - Audio: MP3, M4A, WAV, FLAC
 - Resolution ceiling from 144p to 4K ("720p" means *up to* 720p)
 - In-browser preview for MP4, WEBM, MP3, M4A and WAV
 - Dark / light theme
 
-Not implemented: playlists, batch downloads, subtitles, download history, live progress percentage, desktop GUI.
+Not implemented: playlists, batch downloads, subtitles, download history, desktop GUI.
 
 ## Project layout
 
@@ -53,7 +54,9 @@ pytest
 
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/api/download` | Body `{"url", "format", "resolution"}`. Returns `{file, title, platform, format}`. |
+| `POST` | `/api/jobs` | Body `{"url", "format", "resolution"}`. Starts a background download, returns `202 {id}`. |
+| `GET` | `/api/jobs/{id}` | `status` (`queued` / `downloading` / `processing` / `done` / `error`), `progress` 0–100, `downloaded_bytes`, `total_bytes`, `speed`, `eta`, and `result` (same shape as below) when done. |
+| `POST` | `/api/download` | Synchronous variant: same body, responds when finished with `{file, title, platform, format}`. |
 | `GET` | `/api/file/{id}.{ext}?name=...` | Serves the file as an attachment named after the video. |
 | `GET` | `/health` | Health check. |
 
@@ -80,6 +83,7 @@ The frontend reads `REACT_APP_API_URL` at build time (see `webapp/frontend/.env.
 ## Deployment notes
 
 - Build the backend with the `Dockerfile`; it installs FFmpeg and listens on `$PORT`.
+- Run a single uvicorn worker: job progress is kept in process memory.
 - YouTube and others frequently block requests from cloud/datacenter IPs, so a hosted backend may fail where a local one works.
 - Instagram and most Facebook videos need logged-in cookies (`COOKIES_CONTENT`). Treat that file as a password.
 - Downloading content may violate a platform's terms of service or copyright. Only download media you have the right to.

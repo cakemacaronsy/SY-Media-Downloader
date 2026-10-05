@@ -78,6 +78,9 @@ def _sweep_loop():
                     os.remove(path)
             except OSError:
                 pass
+        with _jobs_lock:
+            for job_id in [k for k, j in _jobs.items() if (j["finished_at"] or j["created_at"] + 6 * 3600) < cutoff]:
+                del _jobs[job_id]
         time.sleep(60)
 
 
@@ -131,16 +134,21 @@ def _check_rate_limit(ip: str):
 
 def _error_text(exc: Exception) -> str:
     text = re.sub(r"\x1b\[[0-9;]*m", "", str(exc))  # strip ANSI colours from yt-dlp
+    text = re.sub(r"^ERROR:\s*", "", text)
+    text = re.sub(r"\s*\(caused by .*$", "", text, flags=re.S)  # drop nested exception repr
     return text[:300]
 
 
-# Plain `def` (not `async def`): FastAPI runs it in a worker thread, so a slow
-# yt-dlp download no longer blocks the event loop (and /health).
-@app.post("/api/download")
-def download_video(body: DownloadRequest, request: Request):
+class DownloadFailed(Exception):
+    def __init__(self, status: int, message: str):
+        super().__init__(message)
+        self.status = status
+        self.message = message
+
+
+def _validate(body: DownloadRequest):
     url = body.url.strip()
     fmt = body.format.lower()
-
     if not is_http_url(url):
         raise HTTPException(400, "Please enter a valid http(s) URL.")
     if fmt not in VIDEO_FORMATS + AUDIO_FORMATS:
@@ -148,20 +156,31 @@ def download_video(body: DownloadRequest, request: Request):
     platform = detect_platform(url)
     if platform == "unknown" and not ALLOW_ANY_URL:
         raise HTTPException(400, "This site is not supported.")
+    return url, fmt, platform
 
+
+def _admit(request: Request):
+    """Rate limit and reserve a download slot. Caller must release _slots."""
     _check_rate_limit(_client_ip(request))
     if not _slots.acquire(blocking=False):
         raise HTTPException(503, "Server is busy. Please try again shortly.")
 
-    file_id = uuid.uuid4().hex
+
+def _perform_download(file_id, url, fmt, resolution, platform, progress_hooks=(), pp_hooks=()) -> dict:
+    """Run yt-dlp and return the API result. Raises DownloadFailed; never leaves partial files."""
     try:
         ydl_opts = {
             "outtmpl": os.path.join(DOWNLOAD_DIR, f"{file_id}.%(ext)s"),
             "quiet": True,
+            "noprogress": True,
             "noplaylist": True,
             "max_filesize": MAX_DOWNLOAD_SIZE_MB * 1024 * 1024,
-            "match_filter": yt_dlp.utils.match_filter_func(f"duration <= {MAX_DURATION_SECONDS}"),
-            **build_ydl_format(fmt, body.resolution),
+            # `<=?` lets through media whose duration is unknown (many social posts);
+            # live streams are refused outright since they never end.
+            "match_filter": yt_dlp.utils.match_filter_func(f"duration <=? {MAX_DURATION_SECONDS} & !is_live"),
+            "progress_hooks": list(progress_hooks),
+            "postprocessor_hooks": list(pp_hooks),
+            **build_ydl_format(fmt, resolution),
         }
         if platform in COOKIE_PLATFORMS:
             cookies = _cookies_path()
@@ -171,7 +190,7 @@ def download_video(body: DownloadRequest, request: Request):
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)  # single pass: metadata + download
         if not info:
-            raise HTTPException(422, "Video was skipped (too long or too large).")
+            raise DownloadFailed(422, "Video was skipped (too long or too large).")
         title = info.get("title") or "download"
         downloads = info.get("requested_downloads") or []
         path = downloads[0].get("filepath") if downloads else None
@@ -179,16 +198,18 @@ def download_video(body: DownloadRequest, request: Request):
             matches = glob.glob(os.path.join(DOWNLOAD_DIR, f"{file_id}.*"))
             path = matches[0] if matches else None
         if not path:
-            raise HTTPException(422, "Nothing was downloaded (file may exceed the size limit).")
-    except HTTPException:
-        raise
+            raise DownloadFailed(422, "Nothing was downloaded: the video is live, longer than "
+                                      f"{MAX_DURATION_SECONDS // 60} min, or larger than {MAX_DOWNLOAD_SIZE_MB} MB.")
     except Exception as e:
-        log.exception("download failed for %s", url)
+        if not isinstance(e, DownloadFailed):
+            log.exception("download failed for %s", url)
+            e = DownloadFailed(500, _error_text(e))
         for leftover in glob.glob(os.path.join(DOWNLOAD_DIR, f"{file_id}.*")):
-            os.remove(leftover)
-        return JSONResponse(status_code=500, content={"error": _error_text(e)})
-    finally:
-        _slots.release()
+            try:
+                os.remove(leftover)
+            except OSError:
+                pass
+        raise e
 
     stored = os.path.basename(path)
     ext = stored.rsplit(".", 1)[-1]
@@ -198,6 +219,128 @@ def download_video(body: DownloadRequest, request: Request):
         "platform": platform,
         "format": ext,
     }
+
+
+# Plain `def` (not `async def`): FastAPI runs it in a worker thread, so a slow
+# yt-dlp download no longer blocks the event loop (and /health).
+@app.post("/api/download")
+def download_video(body: DownloadRequest, request: Request):
+    """Synchronous download: the response arrives when the file is ready."""
+    url, fmt, platform = _validate(body)
+    _admit(request)
+    try:
+        return _perform_download(uuid.uuid4().hex, url, fmt, body.resolution, platform)
+    except DownloadFailed as e:
+        if e.status == 500:
+            return JSONResponse(status_code=500, content={"error": e.message})
+        raise HTTPException(e.status, e.message)
+    finally:
+        _slots.release()
+
+
+# --- Background jobs with progress ------------------------------------------
+# Job state lives in this process's memory, so run a single uvicorn worker.
+_jobs: dict = {}
+SPLIT_PART_RE = re.compile(r"^[0-9a-f]{32}\.f[^.]+\.[a-z0-9]+$")
+_jobs_lock = threading.Lock()
+
+
+def _update_job(job_id: str, **fields):
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+        if job is not None:
+            job.update(fields)
+
+
+def _make_progress_hook(job_id: str):
+    seen_files: list = []
+    best = {"progress": 0.0}
+
+    def hook(d):
+        try:  # an exception here would abort the download
+            fname = d.get("filename") or ""
+            # yt-dlp names the pieces of a video+audio download "<id>.f<format_id>.<ext>"
+            # (and drops requested_formats from the hook's info_dict), so infer it here.
+            parts = 2 if SPLIT_PART_RE.match(os.path.basename(fname)) else 1
+            if fname not in seen_files:
+                seen_files.append(fname)
+            part = min(seen_files.index(fname), parts - 1)
+
+            if d.get("status") == "downloading":
+                total = d.get("total_bytes") or d.get("total_bytes_estimate")
+                done = d.get("downloaded_bytes") or 0
+                fields = {
+                    "status": "downloading", "part": part + 1, "parts": parts,
+                    "downloaded_bytes": done, "total_bytes": total,
+                    "speed": d.get("speed"), "eta": d.get("eta"),
+                }
+                if total:
+                    best["progress"] = max(best["progress"], (part + min(done / total, 1)) / parts * 100)
+                    fields["progress"] = round(best["progress"], 1)
+                _update_job(job_id, **fields)
+            elif d.get("status") == "finished":
+                best["progress"] = max(best["progress"], (part + 1) / parts * 100)
+                _update_job(job_id, progress=round(best["progress"], 1), speed=None, eta=None)
+        except Exception:
+            log.debug("progress hook error", exc_info=True)
+
+    return hook
+
+
+def _make_pp_hook(job_id: str):
+    def hook(d):
+        if d.get("status") == "started":
+            _update_job(job_id, status="processing", progress=100.0, speed=None, eta=None)
+    return hook
+
+
+def _run_job(job_id, url, fmt, resolution, platform):
+    try:
+        result = _perform_download(
+            job_id, url, fmt, resolution, platform,
+            progress_hooks=[_make_progress_hook(job_id)],
+            pp_hooks=[_make_pp_hook(job_id)],
+        )
+        _update_job(job_id, status="done", progress=100.0, result=result, finished_at=time.time())
+    except DownloadFailed as e:
+        _update_job(job_id, status="error", error=e.message, finished_at=time.time())
+    except Exception as e:  # defensive: a job must never stay "running" forever
+        log.exception("job %s crashed", job_id)
+        _update_job(job_id, status="error", error=_error_text(e), finished_at=time.time())
+    finally:
+        _slots.release()
+
+
+@app.post("/api/jobs", status_code=202)
+def create_job(body: DownloadRequest, request: Request):
+    """Start a download in the background; poll GET /api/jobs/{id} for progress."""
+    url, fmt, platform = _validate(body)
+    _admit(request)
+    job_id = uuid.uuid4().hex
+    with _jobs_lock:
+        _jobs[job_id] = {
+            "id": job_id, "status": "queued", "progress": 0.0, "platform": platform,
+            "part": 0, "parts": 1, "downloaded_bytes": 0, "total_bytes": None,
+            "speed": None, "eta": None, "result": None, "error": None,
+            "created_at": time.time(), "finished_at": None,
+        }
+    try:
+        threading.Thread(target=_run_job, args=(job_id, url, fmt, body.resolution, platform), daemon=True).start()
+    except Exception:
+        _slots.release()
+        with _jobs_lock:
+            _jobs.pop(job_id, None)
+        raise
+    return {"id": job_id, "status": "queued"}
+
+
+@app.get("/api/jobs/{job_id}")
+def get_job(job_id: str):
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+        if job is None:
+            raise HTTPException(404, "Job not found (it may have expired).")
+        return {k: v for k, v in job.items() if k not in ("created_at", "finished_at")}
 
 
 @app.get("/api/file/{filename}")

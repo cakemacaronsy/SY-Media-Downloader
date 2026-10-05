@@ -13,7 +13,7 @@ COPY webapp/backend/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy backend code
-COPY webapp/backend ./
+COPY webapp/backend/main.py webapp/backend/helpers.py ./
 
 # Create downloads directory
 RUN mkdir -p downloads
@@ -22,4 +22,5 @@ RUN mkdir -p downloads
 EXPOSE 8000
 
 # Start the application
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Cloud Run / Render / Railway inject $PORT; default to 8000 locally
+CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]
